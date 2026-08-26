@@ -3,6 +3,13 @@ import random
 import time
 import math
 import os
+
+try:
+    from PIL import Image, ImageSequence
+except Exception:
+    Image = None
+    ImageSequence = None
+
 from core.arduino_controller import enviar_comando
 from core.database import obter_ou_criar_jogador, salvar_partida_space_invaders
 
@@ -10,20 +17,29 @@ from core.database import obter_ou_criar_jogador, salvar_partida_space_invaders
 TELEPORT_CHANCE = 0.50
 FREEZE_CHANCE = 0.40
 
-BOSS_FIRST_SPAWN_SCORE = 400
-BOSS_SPAWN_CHANCE = 0.01  # Chance RARA (1% ao abrir nova vaga de spawn)
-BOSS_HITS_REQUIRED = 20
-BOSS_TIME_MULTIPLIER_ON_DEFEAT = 1.25
+BOSS_FIRST_SPAWN_SCORE = 500
+BOSS_SPAWN_CHANCE = 0.012
+BOSS_HITS_REQUIRED = 28
+BOSS_TIME_MULTIPLIER_ON_DEFEAT = 1.1
 BOSS_TIME_DIVISOR_ON_ESCAPE = 1.6
 
 CHARGED_MIN_SCORE = 500
 CHARGED_SPAWN_CHANCE = 0.35
 CHARGED_BUFF_DURATION = 3.5
 
-BONUS_DURATION = 8.0
-BONUS_DROP_CHANCE = 0.05 # Drop raro de item bonus.png (5%)
+BONUS_DURATION = 10.0
+BONUS_DROP_CHANCE = 0.05
+VELOCIDADE_INIMIGO_MAX = 2.0
 
 MAX_INIMIGOS_TELA = 15 # Limite de horda reduzido (máx 15 por vez)
+PODER_UP_TYPES = ['tiro_duplo', 'ataque_area', 'escudo', 'tiro_rapido', 'duplicacao']
+POWERUP_META = {
+    'tiro_duplo': {'label': 'Tiro Duplo', 'cor': (241, 196, 15)},
+    'ataque_area': {'label': 'Área', 'cor': (155, 89, 182)},
+    'escudo': {'label': 'Escudo', 'cor': (79, 195, 255)},
+    'tiro_rapido': {'label': 'Rapidez', 'cor': (46, 204, 113)},
+    'duplicacao': {'label': 'Duplicação', 'cor': (255, 124, 196)},
+}
 
 # SISTEMA DE RARIDADE DE MOBS (SUBCHEFE CREEPER MAIS RARO = PESO 6)
 MOB_RARITY = {
@@ -37,10 +53,47 @@ MOB_RARITY = {
 
 # --- CARREGAMENTO DE SPRITES ---
 SPRITES = {}
+EXPLOSION_FRAMES = []
+
+
+def carregar_animacao_explosao():
+    """Carrega o GIF de explosão como sequência de frames animados."""
+    global EXPLOSION_FRAMES
+    if EXPLOSION_FRAMES:
+        return EXPLOSION_FRAMES
+
+    caminho = os.path.join(os.path.dirname(__file__), 'sprites', 'explosion.gif')
+    if not os.path.exists(caminho):
+        EXPLOSION_FRAMES = []
+        return EXPLOSION_FRAMES
+
+    try:
+        if Image is not None and ImageSequence is not None:
+            imagem = Image.open(caminho)
+            frames = []
+            for frame in ImageSequence.Iterator(imagem):
+                frame_rgba = frame.convert('RGBA')
+                surface = pygame.image.frombuffer(frame_rgba.tobytes(), frame_rgba.size, 'RGBA')
+                frames.append(surface)
+            if frames:
+                EXPLOSION_FRAMES = frames
+                return EXPLOSION_FRAMES
+    except Exception:
+        pass
+
+    try:
+        img = pygame.image.load(caminho).convert_alpha()
+        EXPLOSION_FRAMES = [img]
+    except Exception:
+        EXPLOSION_FRAMES = []
+
+    return EXPLOSION_FRAMES
+
 
 def carregar_sprites():
     """Carrega e redimensiona os sprites da pasta 'sprites'."""
     pasta_sprites = os.path.join(os.path.dirname(__file__), 'sprites')
+    carregar_animacao_explosao()
     
     tamanhos = {
         'nave': (48, 48),
@@ -88,7 +141,7 @@ def carregar_sprites():
         else:
             SPRITES[key] = None
 
-def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0):
+def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0, inimigos_existentes=None):
     """Cria um inimigo respeitando a raridade, tamanho e HP de Subchefe (Creeper Verde = 5 HP)."""
     if tipo_forçado:
         tipo = tipo_forçado
@@ -101,7 +154,13 @@ def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0):
             tipo = random.choices(tipos_candidatos, weights=pesos, k=1)[0]
 
     col_idx = random.randint(0, len(colunas_x) - 1)
-    
+    if inimigos_existentes:
+        coluna_occup = [a for a in inimigos_existentes if int(a.get('coluna', 0)) == col_idx]
+        offset = min(len(coluna_occup) * 38, 120)
+        base_y = -100 - random.randint(0, 2) * 30 - offset
+    else:
+        base_y = random.uniform(-140, -30)
+
     is_subchefe = (tipo == 'verde')
     w = 72 if is_subchefe else 48
     h = 72 if is_subchefe else 48
@@ -112,7 +171,7 @@ def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0):
         "coluna": col_idx,
         "x": float(colunas_x[col_idx]),
         "x_base": float(colunas_x[col_idx]),
-        "y": random.uniform(-160, -50),
+        "y": float(base_y),
         "dx": 0.0,
         "largura": w,
         "altura": h,
@@ -124,7 +183,7 @@ def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0):
     }
 
 def novo_boss_malware(colunas_x):
-    """Cria o Boss Malware: Reúne TODAS as habilidades (dash, zig-zag, teleporte) e possui 20 HP."""
+    """Cria o Boss Malware: Reúne TODAS as habilidades (dash, zig-zag, teleporte) e possui 25 HP."""
     col_idx = random.randint(0, len(colunas_x) - 1)
     return {
         "tipo": "boss_malware",
@@ -201,7 +260,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
     jogador_x = LARGURA // 2
     velocidade_jogador_max = 12
 
-    COLUNAS_X = [100, 250, 400, 550, 700]
+    COLUNAS_X = [150, 275, 400, 525, 650]
 
     # CRIANTE DO FUNDO ESTELAR RETRO (ESTRELAS EM CAMADAS COM PARALAXE)
     estrelas = [
@@ -224,21 +283,29 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
     popups = []
     bonuses = []
     efeitos_raio = []
-
+    ataques_boss = []
     pontuacao = 0
     total_inimigos_derrotados = 0
     tempo_restante = 60.0
     TEMPO_MAXIMO_REF = 60.0
 
-    velocidade_base_inimigo = 0.6
+    velocidade_base_inimigo = 0.50
 
     buff_velocidade_inimigos_ate = 0.0
     bonus_tiro_duplo_ate = 0.0
     bonus_ataque_area_ate = 0.0
+    bonus_escudo_ate = 0.0
+    bonus_tiro_rapido_ate = 0.0
+    bonus_tempo_extra_ate = 0.0
+    bonus_duplicacao_ate = 0.0
+    escudo_absorvidos = 0
 
     boss_primeiro_spawnou = False
     boss_ativo = False
-    boss_aura_ativo = False # AURA DO BOSS: Ativa enquanto o Boss Malware estiver em campo
+    boss_aura_ativo = False
+    boss_horda_ativo = False
+    boss_ataque_proximo = 0.0
+    boss_sequencia_ataque = 0
 
     fonte_hud = pygame.font.SysFont('Consolas', 18, bold=True)
     fonte_sub = pygame.font.SysFont('Consolas', 14)
@@ -248,6 +315,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
     rodando = True
     game_over = False
     tempo_game_over = 0.0  # Momento em que o game over ocorreu (para cooldown de 5s)
+    tempo_final_jogo = 0.0
     COOLDOWN_GAME_OVER = 5.0  # Segundos antes de redirecionar ao menu
     tempo_ultimo_tiro = 0.0
     INTERVALO_TIRO = 0.18
@@ -302,7 +370,9 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             txt_go = fonte_gameover.render("GAME OVER", True, (231, 76, 60))
             tela.blit(txt_go, (LARGURA // 2 - txt_go.get_width() // 2, 170))
 
-            txt_pts = fonte_hud.render(f"PONTUAÇÃO FINAL: {pontuacao:04d}  |  ABATES: {total_inimigos_derrotados}", True, (255, 255, 255))
+            tempo_sobrevivido_go = tempo_final_jogo if tempo_final_jogo > 0 else max(0.0, agora - tempo_inicio_partida)
+            tempo_go_fmt = f"{int(tempo_sobrevivido_go // 60):02d}:{int(tempo_sobrevivido_go % 60):02d}"
+            txt_pts = fonte_hud.render(f"PONTUAÇÃO FINAL: {pontuacao:04d}  |  ABATES: {total_inimigos_derrotados}  |  TEMPO: {tempo_go_fmt}", True, (255, 255, 255))
             tela.blit(txt_pts, (LARGURA // 2 - txt_pts.get_width() // 2, 240))
 
             # BARRA DE COOLDOWN (conta regressiva visual)
@@ -335,12 +405,18 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             relogio.tick(60)
             continue
 
+        if game_over:
+            pygame.display.flip()
+            relogio.tick(60)
+            continue
+
         # TEMPO CONTANDO CONTINUAMENTE
         tempo_restante -= dt
         if tempo_restante <= 0:
             tempo_restante = 0
             if not game_over:
                 game_over = True
+                tempo_final_jogo = max(0.0, agora - tempo_inicio_partida)
                 tempo_game_over = agora  # Registra o momento exato do game over
                 enviar_comando(arduino, 'M')
 
@@ -348,8 +424,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                 if nome_jogador:
                     jogador_id = obter_ou_criar_jogador(nome_jogador)
                     if jogador_id:
-                        tempo_total = agora - tempo_inicio_partida
-                        salvar_partida_space_invaders(jogador_id, pontuacao, tempo_total)
+                        salvar_partida_space_invaders(jogador_id, pontuacao, tempo_final_jogo)
 
         # --- TRANSIÇÃO E SPAWN DO JOGO NORMAL ---
         if fase_jogo == "ONDA_INICIAL":
@@ -363,18 +438,21 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     "criado": agora
                 })
         else:
-            # HORDA MODERADA (MÁXIMO DE 15 INIMIGOS SIMULTÂNEOS NA TELA)
-            num_inimigos_desejado = min(MAX_INIMIGOS_TELA, 3 + (pontuacao // 150))
+            # HORDA MAIS RÁPIDA NO COMEÇO E PROGRESSÃO MAIS GRADUAL.
+            # A aura do boss agora aumenta a horda de forma moderada, sem virar um enjoo de inimigos.
+            num_inimigos_desejado = min(MAX_INIMIGOS_TELA, 9 + (pontuacao // 160))
 
-            # AURA DO BOSS: Quando ativo, duplica a horda de inimigos invocados!
-            mult_horda = 2 if boss_aura_ativo else 1
-            num_horda_com_aura = min(MAX_INIMIGOS_TELA, num_inimigos_desejado * mult_horda)
+            mult_horda = 1.5 if boss_horda_ativo else 1.0
+            horda_extra = 2 if boss_horda_ativo else 0
+            num_horda_com_aura = min(MAX_INIMIGOS_TELA, max(num_inimigos_desejado + horda_extra, int(num_inimigos_desejado * mult_horda)))
 
             while len(aliens) < num_horda_com_aura:
                 if (not boss_primeiro_spawnou) and (pontuacao >= BOSS_FIRST_SPAWN_SCORE):
                     boss_primeiro_spawnou = True
                     boss_ativo = True
                     boss_aura_ativo = True
+                    boss_horda_ativo = True
+                    boss_ataque_proximo = agora + 1.2
                     aliens.append(novo_boss_malware(COLUNAS_X))
                     popups.append({
                         "texto": "☠ BOSS MALWARE DETECTADO! HORDA INVOCADA! ☠",
@@ -387,6 +465,8 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                 elif (boss_primeiro_spawnou) and (not boss_ativo) and (pontuacao >= BOSS_FIRST_SPAWN_SCORE) and (random.random() < BOSS_SPAWN_CHANCE):
                     boss_ativo = True
                     boss_aura_ativo = True
+                    boss_horda_ativo = True
+                    boss_ataque_proximo = agora + 1.2
                     aliens.append(novo_boss_malware(COLUNAS_X))
                     popups.append({
                         "texto": "☠ BOSS MALWARE SURGIU! ☠",
@@ -396,7 +476,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                         "criado": agora
                     })
                 else:
-                    aliens.append(novo_inimigo(COLUNAS_X, pontuacao=pontuacao))
+                    aliens.append(novo_inimigo(COLUNAS_X, pontuacao=pontuacao, inimigos_existentes=aliens))
 
         # MOVIMENTAÇÃO DO JOGADOR
         MIN_X = 45
@@ -414,14 +494,23 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
         # DISPAROS DO JOGADOR
         tiro_duplo_ativo = (agora < bonus_tiro_duplo_ate)
         ataque_area_ativo = (agora < bonus_ataque_area_ate)
+        tiro_rapido_ativo = (agora < bonus_tiro_rapido_ate)
+        escudo_ativo = (agora < bonus_escudo_ate)
+        duplicacao_ativa = (agora < bonus_duplicacao_ate)
+        INTERVALO_TIRO_ATUAL = 0.08 if tiro_rapido_ativo else INTERVALO_TIRO
 
-        if btn_tiro == 0 and (agora - tempo_ultimo_tiro >= INTERVALO_TIRO):
+        if btn_tiro == 0 and (agora - tempo_ultimo_tiro >= INTERVALO_TIRO_ATUAL):
+            posicoes_tiro = [jogador_x]
             if tiro_duplo_ativo:
-                tiros.append({"x": jogador_x - 14, "y": ALTURA - 60, "area": ataque_area_ativo})
-                tiros.append({"x": jogador_x + 14, "y": ALTURA - 60, "area": ataque_area_ativo})
-            else:
-                tiros.append({"x": jogador_x, "y": ALTURA - 60, "area": ataque_area_ativo})
-                
+                posicoes_tiro = [jogador_x - 14, jogador_x + 14]
+
+            for x_tiro in posicoes_tiro:
+                tiros.append({"x": x_tiro, "y": ALTURA - 60, "area": ataque_area_ativo})
+
+            if duplicacao_ativa:
+                for offset in (-60, 60):
+                    tiros.append({"x": jogador_x + offset, "y": ALTURA - 60, "area": False, "duplicacao": True})
+
             enviar_comando(arduino, 'T')
             tempo_ultimo_tiro = agora
 
@@ -430,6 +519,68 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             t['y'] -= 15
             if t['y'] < 0:
                 tiros.remove(t)
+
+        # ATAQUE DIRETO DO BOSS: dois disparos alternados em direções diferentes, com centro livre como zona segura
+        if boss_ativo and agora >= boss_ataque_proximo:
+            boss = next((a for a in aliens if a['tipo'] == 'boss_malware'), None)
+            if boss is not None:
+                alvo_x = jogador_x
+                alvo_y = ALTURA - 45
+                centro_seguro = LARGURA // 2
+                dx = alvo_x - boss['x']
+                dy = alvo_y - (boss['y'] + 35)
+                dist = max(1.0, math.hypot(dx, dy))
+
+                # padrão alternado: 2 disparos em lados opostos, com centro livre
+                if boss_sequencia_ataque % 2 == 0:
+                    grupos = [(-1, -0.28), (1, 0.28)]
+                else:
+                    grupos = [(-1, -0.12), (1, 0.12)]
+
+                boss_sequencia_ataque += 1
+
+                for lado, inclinacao in grupos:
+                    base_dir_x = math.copysign(1.0, alvo_x - centro_seguro if lado < 0 else centro_seguro - alvo_x)
+                    angulo_base = math.atan2(dy, dx)
+                    for proj_idx in range(3):
+                        spread = (proj_idx - 1) * 0.22
+                        angulo = angulo_base + inclinacao + spread * lado
+                        velocidade = 5.1
+                        ataques_boss.append({
+                            'x': boss['x'] + (lado * 18),
+                            'y': boss['y'] + 35,
+                            'vx': math.cos(angulo) * velocidade,
+                            'vy': math.sin(angulo) * velocidade,
+                            'raio': 9,
+                            'criado': agora,
+                        })
+
+                boss_ataque_proximo = agora + 1.7
+
+        for atk in ataques_boss[:]:
+            atk['x'] += atk['vx'] * 60 * dt
+            atk['y'] += atk['vy'] * 60 * dt
+
+            if (abs(atk['x'] - jogador_x) < 26) and (abs(atk['y'] - (ALTURA - 45)) < 24):
+                if agora < bonus_escudo_ate and escudo_absorvidos < 1:
+                    escudo_absorvidos += 1
+                    bonus_escudo_ate = 0.0
+                    popups.append({
+                        "texto": "🛡 BLOQUEADO", "cor": (79, 195, 255), "x": jogador_x, "y": ALTURA - 80, "criado": agora
+                    })
+                    popups.append({
+                        "texto": "🛡 ESCUDO QUEBRADO", "cor": (120, 140, 180), "x": jogador_x, "y": ALTURA - 110, "criado": agora
+                    })
+                    ataques_boss.remove(atk)
+                    continue
+
+                tempo_restante -= 25.0
+                popups.append({
+                    "texto": "-25s", "cor": (231, 76, 60), "x": jogador_x, "y": ALTURA - 80, "criado": agora
+                })
+                ataques_boss.remove(atk)
+            elif atk['y'] > ALTURA + 30 or atk['x'] < -50 or atk['x'] > LARGURA + 50:
+                ataques_boss.remove(atk)
 
         # Atualiza Itens de Bônus Flutuantes (Usando bonus.png)
         for b in bonuses[:]:
@@ -441,7 +592,17 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                 elif b['tipo'] == 'ataque_area':
                     bonus_ataque_area_ate = agora + BONUS_DURATION
                     popups.append({"texto": "💥 ATAQUE EM ÁREA ATIVADO!", "cor": (155, 89, 182), "x": jogador_x, "y": ALTURA - 90, "criado": agora})
-                
+                elif b['tipo'] == 'escudo':
+                    bonus_escudo_ate = agora + BONUS_DURATION
+                    escudo_absorvidos = 0
+                    popups.append({"texto": "🛡 ESCUDO ATIVADO!", "cor": (79, 195, 255), "x": jogador_x, "y": ALTURA - 90, "criado": agora})
+                elif b['tipo'] == 'tiro_rapido':
+                    bonus_tiro_rapido_ate = agora + BONUS_DURATION
+                    popups.append({"texto": "⚙ FIRING BOOST!", "cor": (46, 204, 113), "x": jogador_x, "y": ALTURA - 90, "criado": agora})
+                elif b['tipo'] == 'duplicacao':
+                    bonus_duplicacao_ate = agora + BONUS_DURATION
+                    popups.append({"texto": "✦ DUPLICAÇÃO ATIVA! ✦", "cor": (255, 124, 196), "x": jogador_x, "y": ALTURA - 90, "criado": agora})
+
                 enviar_comando(arduino, 'E')
                 bonuses.remove(b)
             elif b['y'] > ALTURA:
@@ -454,8 +615,8 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             if agora < a.get('congelado_ate', 0.0):
                 continue
 
-            mult_buff = 1.5 if buff_velocidade_ativo else 1.0
-            vel_atual = velocidade_base_inimigo * mult_buff
+            mult_buff = 1.35 if buff_velocidade_ativo else 1.0
+            vel_atual = min(velocidade_base_inimigo * mult_buff, VELOCIDADE_INIMIGO_MAX)
 
             if a['tipo'] == 'verde': # Subchefe Creeper Verde (Movimentação Zig-Zag)
                 a['y'] += vel_atual * 0.8
@@ -502,10 +663,10 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                 dano = MOB_RARITY.get(a['tipo'], {}).get('dano_fuga', 5.0)
                 # AURA DO BOSS: Inimigos comuns causam o DOBRO DO DANO de fuga!
                 if boss_aura_ativo:
-                    dano *= 2.0
-                    popups.append({"texto": f"☠ AURA! -{int(dano)}s", "cor": (231, 76, 60), "x": a['x'], "y": ALTURA - 90, "criado": agora})
-                else:
-                    popups.append({"texto": f"-{int(dano)}s", "cor": (231, 76, 60), "x": a['x'], "y": ALTURA - 90, "criado": agora})
+                    dano *= 2.4
+                    popups.append({"texto": f"☠ AURA!", "cor": (231, 76, 60), "x": a['x'], "y": ALTURA - 90, "criado": agora})
+                elif a['tipo'] == 'verde':
+                    popups.append({"texto": "!", "cor": (231, 76, 60), "x": a['x'], "y": ALTURA - 90, "criado": agora})
                 tempo_restante -= dano
 
                 if a in aliens:
@@ -532,7 +693,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                         a['x_base'] = float(COLUNAS_X[nova_col])
                         a['y'] = max(30.0, a['y'] - random.uniform(30, 80))
 
-                        popups.append({"texto": "🌀 TELEPORTE!", "cor": (155, 89, 182), "x": a['x'], "y": a['y'], "criado": agora})
+                        popups.append({"texto": "↗", "cor": (155, 89, 182), "x": a['x'], "y": a['y'], "criado": agora})
                         if t in tiros and not eh_tiro_area:
                             tiros.remove(t)
                         continue
@@ -549,14 +710,15 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                         pts_ganhos = 100 if a['tipo'] == 'boss_malware' else MOB_RARITY.get(a['tipo'], {}).get('pontos', 10)
                         pontuacao += pts_ganhos
                         total_inimigos_derrotados += 1
-                        velocidade_base_inimigo += 0.01
+                        velocidade_base_inimigo = min(velocidade_base_inimigo + 0.006, 0.92)
 
-                        tam_exp = 240 if a['tipo'] == 'boss_malware' else (140 if a['tipo'] == 'verde' else 110)
-                        explosoes.append({"x": ax, "y": ay, "criado": agora, "tamanho": tam_exp})
+                        tam_exp = 240 if a['tipo'] == 'boss_malware' else (360 if a['tipo'] == 'verde' else 110)
+                        explosoes.append({"x": ax, "y": ay, "criado": agora, "tamanho": tam_exp, "tipo": a['tipo']})
 
-                        # DROP RARO DO ITEM BÔNUS (5% de chance)
-                        if random.random() < BONUS_DROP_CHANCE:
-                            tipo_b = 'tiro_duplo' if random.random() < 0.5 else 'ataque_area'
+                        # DROP DE POWER-UP: chance aumentada enquanto o boss está vivo
+                        chance_drop = BONUS_DROP_CHANCE * 2.5 if boss_ativo else BONUS_DROP_CHANCE
+                        if random.random() < min(0.9, chance_drop):
+                            tipo_b = random.choice(PODER_UP_TYPES)
                             bonuses.append({"tipo": tipo_b, "x": ax, "y": ay})
 
                         # HABILIDADE GELO: 40% de chance de congelar apenas inimigos próximos
@@ -567,19 +729,19 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                                 if dist <= RAIO_CONGELAMENTO:
                                     outro['congelado_ate'] = agora + 3.0
 
-                            popups.append({"texto": "❄ INIMIGOS CONGELADOS! ❄", "cor": (52, 152, 219), "x": ax, "y": ay - 30, "criado": agora})
+                            popups.append({"texto": "❄", "cor": (52, 152, 219), "x": ax, "y": ay - 30, "criado": agora})
 
                         # HABILIDADE CHARGED: Buff de velocidade + efeito do sprite charged-attack.png
                         if a['tipo'] == 'charged':
                             buff_velocidade_inimigos_ate = agora + CHARGED_BUFF_DURATION
                             efeitos_raio.append({"x": ax, "y": ay, "criado": agora})
-                            popups.append({"texto": "⚡ SURTO CHARGED!", "cor": (230, 126, 34), "x": ax, "y": ay - 20, "criado": agora})
+                            popups.append({"texto": "⚡", "cor": (230, 126, 34), "x": ax, "y": ay - 20, "criado": agora})
 
                         # SUBCHEFE CREEPER VERDE DERROTADO: +30s LOOT + EXPLODE TODOS OS INIMIGOS (EXCETO BOSS MALWARE!)
                         if a['tipo'] == 'verde':
                             tempo_restante += 30.0
                             enviar_comando(arduino, 'E')
-                            popups.append({"texto": "+30s LOOT & BOMBA TOTAL!", "cor": (46, 204, 113), "x": ax, "y": ay - 30, "criado": agora})
+                            popups.append({"texto": "+30s", "cor": (46, 204, 113), "x": ax, "y": ay - 30, "criado": agora})
 
                             # EXPLODE INIMIGOS COMUNS (EXCETO O BOSS MALWARE!)
                             for outro in aliens[:]:
@@ -590,12 +752,15 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
 
                         # BOSS MALWARE DERROTADO: Multiplicar tempo atual por 1.25 + Aura desativada + Bomba de área gigante
                         elif a['tipo'] == 'boss_malware':
-                            tempo_restante = tempo_restante * BOSS_TIME_MULTIPLIER_ON_DEFEAT
+                            tempo_restante = max(0.0, tempo_restante * BOSS_TIME_MULTIPLIER_ON_DEFEAT)
                             boss_ativo = False
-                            boss_aura_ativo = False  # AURA ENCERRADA ao derrotar o Boss
+                            boss_aura_ativo = False
+                            boss_horda_ativo = False
+                            boss_ataque_proximo = agora + 999.0
+                            ataques_boss.clear()
                             enviar_comando(arduino, 'E')
 
-                            popups.append({"texto": "★ BOSS DERROTADO! TEMPO x 1.25 ★", "cor": (241, 196, 15), "x": LARGURA // 2, "y": 180, "criado": agora})
+                            popups.append({"texto": "★ VITÓRIA ★", "cor": (241, 196, 15), "x": LARGURA // 2, "y": 180, "criado": agora})
 
                             for outro in aliens[:]:
                                 if outro != a:
@@ -609,7 +774,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                         if a in aliens:
                             aliens.remove(a)
                             if fase_jogo == "JOGO_NORMAL":
-                                aliens.append(novo_inimigo(COLUNAS_X, pontuacao=pontuacao))
+                                aliens.append(novo_inimigo(COLUNAS_X, pontuacao=pontuacao, inimigos_existentes=aliens))
 
         # DESENHO NA TELA
         tela.fill((10, 12, 22))
@@ -631,6 +796,17 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
         else:
             pygame.draw.polygon(tela, (46, 204, 113), [(px, py - 22), (px - 24, py + 10), (px + 24, py + 10)])
 
+        if agora < bonus_duplicacao_ate:
+            for offset in (-60, 60):
+                clone_x = jogador_x + offset
+                clone_img = SPRITES.get('nave')
+                if clone_img:
+                    clone_surface = clone_img.copy()
+                    clone_surface.set_alpha(140)
+                    tela.blit(clone_surface, (clone_x - 24, py - 24))
+                else:
+                    pygame.draw.polygon(tela, (46, 204, 113), [(clone_x, py - 22), (clone_x - 24, py + 10), (clone_x + 24, py + 10)], 2)
+
         # TIROS DO JOGADOR
         for t in tiros:
             cor_t = (155, 89, 182) if t.get('area', False) else (241, 196, 15)
@@ -639,12 +815,17 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             else:
                 pygame.draw.rect(tela, cor_t, (t['x'] - 2, t['y'], 5, 14), border_radius=2)
 
-        # ITENS DE BÔNUS FLUTUANTES (USANDO bonus.png)
+        # ATAQUES DIRETOS DO BOSS
+        for atk in ataques_boss:
+            pygame.draw.circle(tela, (231, 76, 60), (int(atk['x']), int(atk['y'])), atk['raio'])
+            pygame.draw.circle(tela, (255, 180, 180), (int(atk['x']), int(atk['y'])), max(3, atk['raio'] // 2))
+
+        # ITENS DE BÔNUS FLUTUANTES EM BOLINHAS COLORIDAS (SEM ENGENHARIA)
         for b in bonuses:
-            if SPRITES.get('bonus'):
-                tela.blit(SPRITES['bonus'], (b['x'] - 16, b['y'] - 16))
-            else:
-                pygame.draw.circle(tela, (241, 196, 15), (int(b['x']), int(b['y'])), 14)
+            tipo = b.get('tipo', 'tiro_duplo')
+            cor = POWERUP_META.get(tipo, POWERUP_META['tiro_duplo'])['cor']
+            pygame.draw.circle(tela, cor, (int(b['x']), int(b['y'])), 12)
+            pygame.draw.circle(tela, (255, 255, 255), (int(b['x']) - 3, int(b['y']) - 3), 4)
 
         # RENDERIZAÇÃO DO EFEITO VISUAL CHARGED-ATTACK (RAIO CHARGED)
         for ef in efeitos_raio[:]:
@@ -706,7 +887,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     tela.blit(s_ice, (ax - a['largura']//2 - 4, ay - 4))
                     pygame.draw.rect(tela, (200, 240, 255), (ax - a['largura']//2 - 4, ay - 4, a['largura'] + 8, a['altura'] + 8), width=2, border_radius=6)
 
-        # RENDERIZAÇÃO DAS EXPLOSÕES USANDO O SPRITE explosion.gif
+        # RENDERIZAÇÃO DAS EXPLOSÕES USANDO A ANIMAÇÃO DO GIF explosion.gif
         for ex in explosoes[:]:
             decorrido_exp = agora - ex['criado']
             if decorrido_exp > 0.5:
@@ -717,9 +898,13 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             tam_max = ex.get('tamanho', 110)
             tam_atual = int(tam_max * (0.5 + 0.5 * progresso))
 
-            if SPRITES.get('explosion'):
-                img_exp = pygame.transform.scale(SPRITES['explosion'], (tam_atual, tam_atual))
-                tela.blit(img_exp, (int(ex['x']) - tam_atual // 2, int(ex['y']) - tam_atual // 2))
+            if EXPLOSION_FRAMES:
+                fator_extra = 1.7 if ex.get('tipo') == 'verde' else 1.0
+                tam_final = max(80, int(tam_atual * fator_extra))
+                idx = min(len(EXPLOSION_FRAMES) - 1, int(progresso * len(EXPLOSION_FRAMES)))
+                frame = EXPLOSION_FRAMES[idx]
+                img_exp = pygame.transform.smoothscale(frame, (tam_final, tam_final))
+                tela.blit(img_exp, (int(ex['x']) - tam_final // 2, int(ex['y']) - tam_final // 2))
             else:
                 pygame.draw.circle(tela, (241, 196, 15), (int(ex['x']), int(ex['y'])), tam_atual // 2)
 
@@ -727,13 +912,15 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
         pygame.draw.rect(tela, (20, 25, 38), (0, 0, LARGURA, 50))
         pygame.draw.line(tela, (45, 52, 70), (0, 50), (LARGURA, 50), 2)
 
-        txt_score = fonte_hud.render(f"PTS: {pontuacao:04d}", True, (255, 255, 255))
+        tempo_sobrevivido = tempo_final_jogo if game_over else max(0.0, agora - tempo_inicio_partida)
+        tempo_fmt = f"{int(tempo_sobrevivido // 60):02d}:{int(tempo_sobrevivido % 60):02d}"
+        txt_score = fonte_hud.render(f"PTS: {pontuacao:04d}  |  TEMPO: {tempo_fmt}", True, (255, 255, 255))
         tela.blit(txt_score, (20, 15))
 
         # BARRA DE TEMPO DE VIDA
-        bar_x, bar_y, bar_w, bar_h = 240, 16, 320, 18
+        bar_x, bar_y, bar_w, bar_h = 238, 42, 324, 18
         pygame.draw.rect(tela, (30, 35, 50), (bar_x, bar_y, bar_w, bar_h), border_radius=9)
-        
+
         pct_tempo = max(0.0, min(1.0, tempo_restante / TEMPO_MAXIMO_REF))
         fill_w = int(bar_w * pct_tempo)
 
@@ -749,12 +936,39 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
         pygame.draw.rect(tela, (70, 80, 100), (bar_x, bar_y, bar_w, bar_h), width=2, border_radius=9)
 
         txt_tempo = fonte_hud.render(f"TEMPO: {tempo_restante:4.1f}s", True, (255, 255, 255))
-        tela.blit(txt_tempo, (bar_x + bar_w//2 - txt_tempo.get_width()//2, bar_y - 1))
+        tela.blit(txt_tempo, (bar_x + bar_w//2 - txt_tempo.get_width()//2, bar_y - 24))
 
         status_str = f"ARDUINO ({arduino.port})" if arduino else "TECLADO"
         cor_st = (46, 204, 113) if arduino else (241, 196, 15)
         txt_status = fonte_hud.render(status_str, True, cor_st)
         tela.blit(txt_status, (LARGURA - txt_status.get_width() - 20, 15))
+
+        # HUD DE POWER-UPS ATIVOS
+        ativos = []
+        for key, meta in POWERUP_META.items():
+            timer = {
+                'tiro_duplo': bonus_tiro_duplo_ate,
+                'ataque_area': bonus_ataque_area_ate,
+                'escudo': bonus_escudo_ate,
+                'tiro_rapido': bonus_tiro_rapido_ate,
+                'duplicacao': bonus_duplicacao_ate,
+            }.get(key, 0.0)
+            if agora < timer:
+                ativos.append((key, meta['label'], meta['cor'], max(0.0, timer - agora)))
+
+        if ativos:
+            panel_x = 18
+            panel_y = 60
+            panel_w = 220
+            panel_h = 18 + len(ativos) * 20
+            pygame.draw.rect(tela, (18, 23, 34), (panel_x, panel_y, panel_w, panel_h), border_radius=10)
+            pygame.draw.rect(tela, (80, 90, 116), (panel_x, panel_y, panel_w, panel_h), width=1, border_radius=10)
+
+            for idx, (key, label, cor, restante) in enumerate(ativos):
+                py = panel_y + 12 + idx * 20
+                pygame.draw.circle(tela, cor, (panel_x + 12, py + 6), 6)
+                txt_p = fonte_sub.render(f"{label}: {restante:.1f}s", True, (240, 245, 255))
+                tela.blit(txt_p, (panel_x + 24, py - 2))
 
         # POPUPS FLUTUANTES
         for p in popups[:]:

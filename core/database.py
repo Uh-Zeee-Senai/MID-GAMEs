@@ -73,14 +73,14 @@ def salvar_partida_space_invaders(jogador_id, pontuacao, tempo_segundos=0.0):
     agora_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     cursor.execute('''
-        SELECT id, pontuacao FROM partidas
+        SELECT id, pontuacao, tempo_segundos FROM partidas
         WHERE jogador_id = ? AND jogo = 'space_invaders'
     ''', (jogador_id,))
     row = cursor.fetchone()
 
     if row:
-        partida_id, pontuacao_antiga = row
-        if pontuacao > pontuacao_antiga:
+        partida_id, pontuacao_antiga, tempo_antigo = row
+        if pontuacao > pontuacao_antiga or (pontuacao == pontuacao_antiga and tempo_segundos > (tempo_antigo or 0.0)):
             cursor.execute('''
                 UPDATE partidas
                 SET pontuacao = ?, tempo_segundos = ?, data_hora = ?
@@ -143,16 +143,16 @@ def salvar_partida_adventure(jogador_id, tempo_segundos, derrotou_zecreppe=0, ve
     conn.close()
 
 def obter_ranking_space_invaders(limit=20):
-    """Retorna o Top 20 do Space Invaders: (pos, nome, pontuacao, data_hora)."""
+    """Retorna o Top 20 do Space Invaders com pontuação e tempo sobrevivido."""
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute('''
-        SELECT j.nome, p.pontuacao, p.data_hora
+        SELECT j.nome, p.pontuacao, p.tempo_segundos, p.data_hora
         FROM partidas p
         JOIN jogadores j ON p.jogador_id = j.id
         WHERE p.jogo = 'space_invaders'
-        ORDER BY p.pontuacao DESC, p.data_hora ASC
+        ORDER BY p.pontuacao DESC, p.tempo_segundos DESC, p.data_hora ASC
         LIMIT ?
     ''', (limit,))
 
@@ -160,11 +160,14 @@ def obter_ranking_space_invaders(limit=20):
     conn.close()
 
     resultado = []
-    for idx, (nome, pts, dt) in enumerate(rows, 1):
+    for idx, (nome, pts, tempo_seg, dt) in enumerate(rows, 1):
+        tempo_seg = float(tempo_seg or 0.0)
         resultado.append({
             'posicao': idx,
             'nome': nome,
             'pontuacao': pts,
+            'tempo_segundos': tempo_seg,
+            'tempo': formatar_tempo(tempo_seg) if tempo_seg > 0 else 'N/A',
             'data': dt
         })
     return resultado

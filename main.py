@@ -3,6 +3,7 @@ import sys
 import os
 import time
 import math
+import array
 from core.arduino_controller import conectar_arduino, ler_hardware, enviar_comando
 from core import teste_controle
 from core.database import init_db
@@ -12,44 +13,85 @@ from space_invaders import jogo as space_invaders_jogo
 from adventure import jogo as adventure_jogo
 from adventure.nivel_modal import selecionar_nivel_adventure
 
+
+def _gerar_tone(frequencia=440, duracao_ms=60, volume=0.18):
+    # Sem áudio do Python; apenas o buzzer do Arduino deve emitir sons.
+    return None
+
+
 def main():
     pygame.init()
+    try:
+        pygame.mixer.init()
+    except Exception:
+        pass
     init_db()  # Inicializa o banco de dados SQLite (arcade.db)
 
     LARGURA, ALTURA = 800, 600
     tela = pygame.display.set_mode((LARGURA, ALTURA))
-    pygame.display.set_caption("RETRO ARCADE CABINET - ROBOCORE KIT")
     relogio = pygame.time.Clock()
 
     # Conecta ao Arduino se disponível
     arduino = conectar_arduino()
 
     opcao_menu = 0
-    opcoes = [
-        {"icon": "🚀", "titulo": "SPACE INVADERS", "sub": "RETRO 5-COL ARCADE SHOOTER"},
-        {"icon": "🐉", "titulo": "ADVENTURE ATARI 2600", "sub": "MAPA COMPLETO, 3 CASTELOS & BOSS ZÉCREPPE"},
-        {"icon": "🏆", "titulo": "HALL DA FAMA", "sub": "VENCEDORES ORIGINAIS & TOP 20"},
-        {"icon": "⚙️", "titulo": "HARDWARE DIAGNOSTIC", "sub": "TESTE DE JOYSTICK E BOTÕES"},
-        {"icon": "❌", "titulo": "SAIR DO LAUNCHER", "sub": "ENCERRAR O SISTEMA ARCADE"}
-    ]
 
-    # Cores Anos 80 Neon CRT
+    # Paleta principal mais consistente com a tela inicial
     COR_FUNDO = (10, 8, 22)
     COR_NEON_ROSA = (255, 0, 128)
-    COR_NEON_AZUL = (0, 240, 255)
-    COR_NEON_AMARELO = (255, 230, 0)
-    COR_NEON_VERDE = (0, 255, 120)
+    COR_NEON_AZUL = (95, 145, 255)
+    COR_NEON_AMARELO = (255, 210, 110)
+    COR_NEON_VERDE = (92, 210, 140)
     COR_TEXTO_MUTED = (140, 150, 180)
     COR_CARD_BG = (18, 16, 32)
-    COR_CARD_SEL = (35, 20, 55)
+    COR_CARD_SEL = (35, 26, 48)
+    COR_BRANCO = (245, 245, 245)
+    COR_PANEL = (17, 15, 28)
 
-    fonte_titulo_lg = pygame.font.SysFont('Consolas', 30, bold=True)
-    fonte_card_tit = pygame.font.SysFont('Consolas', 18, bold=True)
-    fonte_card_sub = pygame.font.SysFont('Consolas', 12)
-    fonte_arcade_sm = pygame.font.SysFont('Consolas', 13, bold=True)
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    FONTE_PIXEL = os.path.join(BASE_DIR, 'assets', 'fonts', 'PressStart2P-Regular.ttf')
+    SPRITES_SPACE_DIR = os.path.join(BASE_DIR, 'space_invaders', 'sprites')
+
+    nave_tela_inicial = pygame.image.load(os.path.join(SPRITES_SPACE_DIR, 'nave-tela-inicial.png')).convert_alpha()
+    alien_tela_inicial = pygame.image.load(os.path.join(SPRITES_SPACE_DIR, 'alien.png')).convert_alpha()
+
+    def carregar_fonte_pixel(tamanho):
+        if os.path.exists(FONTE_PIXEL):
+            return pygame.font.Font(FONTE_PIXEL, tamanho)
+
+        candidatos = [
+            'Press Start 2P', 'Press Start K', 'Courier New', 'Consolas', 'Arial'
+        ]
+        for nome in candidatos:
+            try:
+                caminho = pygame.font.match_font(nome)
+                if caminho:
+                    return pygame.font.Font(caminho, tamanho)
+            except Exception:
+                pass
+        return pygame.font.SysFont('Consolas', tamanho, bold=True)
+
+    fonte_titulo_lg = carregar_fonte_pixel(54)
+    fonte_titulo_md = carregar_fonte_pixel(38)
+    fonte_card_tit = carregar_fonte_pixel(20)
+    fonte_card_sub = carregar_fonte_pixel(13)
+    fonte_arcade_sm = carregar_fonte_pixel(13)
+    fonte_acao = carregar_fonte_pixel(16)
 
     tempo_ultima_navegacao = 0
+    tempo_ultimo_confirmar = 0
     ultimo_nome = ""
+
+    opcoes_menu = [
+        {"real_idx": 0, "titulo": "SPACE", "sub": "INVADERS"},
+        {"real_idx": 1, "titulo": "ADVENTURE", "sub": "ATARI"},
+        {"real_idx": 2, "titulo": "SCORE", "sub": ""},
+    ]
+    lista_rects_menu = []
+
+    def tocar_menu_sfx(tipo):
+        # Sem som via computador; o Arduino cuida do buzzer.
+        return
 
     # Fundo Estelar Discreto do Launcher
     estrelas_launcher = [
@@ -62,24 +104,25 @@ def main():
 
     def executar_opcao(idx):
         nonlocal ultimo_nome, rodando
-        if idx == 0:
+        real_idx = opcoes_menu[idx]["real_idx"]
+
+        if real_idx == 0:
             nome = solicitar_nome_jogador(tela, relogio, arduino, ler_hardware, ultimo_nome)
             if nome:
                 ultimo_nome = nome
                 space_invaders_jogo.rodar_jogo(tela, relogio, arduino, ler_hardware, nome)
-        elif idx == 1:
+        elif real_idx == 1:
             nome = solicitar_nome_jogador(tela, relogio, arduino, ler_hardware, ultimo_nome)
             if nome:
                 ultimo_nome = nome
                 nivel = selecionar_nivel_adventure(tela, relogio, arduino, ler_hardware)
                 if nivel:
                     adventure_jogo.rodar_jogo(tela, relogio, arduino, ler_hardware, nome, nivel)
-        elif idx == 2:
+        elif real_idx == 2:
             rankings_ui.exibir_rankings(tela, relogio, arduino, ler_hardware)
-        elif idx == 3:
-            teste_controle.rodar_teste()
-        elif idx == 4:
-            rodando = False
+
+        pygame.event.clear()
+        tocar_menu_sfx('confirm')
 
     while rodando:
         frame_count += 1
@@ -89,12 +132,33 @@ def main():
             if evento.type == pygame.QUIT:
                 rodando = False
             elif evento.type == pygame.KEYDOWN:
-                if evento.key in (pygame.K_UP, pygame.K_w):
-                    opcao_menu = (opcao_menu - 1) % len(opcoes)
+                if evento.key == pygame.K_ESCAPE:
+                    rodando = False
+                elif evento.key in (pygame.K_UP, pygame.K_w):
+                    opcao_menu = (opcao_menu - 1) % len(opcoes_menu)
+                    tempo_ultima_navegacao = agora
+                    tocar_menu_sfx('move')
                 elif evento.key in (pygame.K_DOWN, pygame.K_s):
-                    opcao_menu = (opcao_menu + 1) % len(opcoes)
+                    opcao_menu = (opcao_menu + 1) % len(opcoes_menu)
+                    tempo_ultima_navegacao = agora
+                    tocar_menu_sfx('move')
                 elif evento.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    executar_opcao(opcao_menu)
+                    if agora - tempo_ultimo_confirmar > 0.35:
+                        tempo_ultimo_confirmar = agora
+                        executar_opcao(opcao_menu)
+
+            elif evento.type == pygame.MOUSEMOTION:
+                xpos, ypos = evento.pos
+                for idx, rect in enumerate(lista_rects_menu):
+                    if rect.collidepoint(xpos, ypos):
+                        opcao_menu = idx
+                        break
+            elif evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
+                xpos, ypos = evento.pos
+                for idx, rect in enumerate(lista_rects_menu):
+                    if rect.collidepoint(xpos, ypos):
+                        executar_opcao(idx)
+                        break
 
         # Lê os dados do hardware
         joy_x, joy_y, btn_menu, btn_tiro = ler_hardware(arduino)
@@ -102,15 +166,15 @@ def main():
         # Navegação no Menu por Joystick Y
         if agora - tempo_ultima_navegacao > 0.22:
             if joy_y < 300:
-                opcao_menu = (opcao_menu - 1) % len(opcoes)
+                opcao_menu = (opcao_menu - 1) % len(opcoes_menu)
                 tempo_ultima_navegacao = agora
             elif joy_y > 700:
-                opcao_menu = (opcao_menu + 1) % len(opcoes)
+                opcao_menu = (opcao_menu + 1) % len(opcoes_menu)
                 tempo_ultima_navegacao = agora
 
         # Seleção por Botão de Tiro
-        if btn_tiro == 0 and (agora - tempo_ultima_navegacao > 0.3):
-            tempo_ultima_navegacao = agora
+        if btn_tiro == 0 and (agora - tempo_ultimo_confirmar > 0.35):
+            tempo_ultimo_confirmar = agora
             executar_opcao(opcao_menu)
 
         # --- RENDERIZAÇÃO RETRO ARCADE ---
@@ -125,89 +189,81 @@ def main():
         for y in range(0, ALTURA, 4):
             pygame.draw.line(tela, (14, 12, 28), (0, y), (LARGURA, y), 1)
 
-        # Molduras Duplas Neon
-        pygame.draw.rect(tela, COR_NEON_ROSA, (15, 10, 770, 580), width=3, border_radius=8)
-        pygame.draw.rect(tela, COR_NEON_AZUL, (21, 16, 758, 568), width=1, border_radius=6)
+        # --- MENU INICIAL RETRO PIXEL ---
+        # Fundo limpo, sem borda, com o look espacial da referência
 
-        # Header Superior
-        nome_exibido = f"JOGADOR ATIVO: {ultimo_nome}" if ultimo_nome else "JOGADOR: ANÔNIMO"
-        txt_hi = fonte_arcade_sm.render(f"ARCADE CABINET SYSTEM   |   {nome_exibido}", True, COR_NEON_AMARELO)
-        tela.blit(txt_hi, (LARGURA // 2 - txt_hi.get_width() // 2, 24))
+        # Título principal em blocos grandes
+        titulo_shadow = fonte_titulo_lg.render("MID", True, (255, 0, 0))
+        titulo_shadow_2 = fonte_titulo_lg.render("COLLECTION", True, (0, 240, 255))
+        tela.blit(titulo_shadow, (LARGURA // 2 - titulo_shadow.get_width() // 2 + 4, 80 + 4))
+        tela.blit(titulo_shadow_2, (LARGURA // 2 - titulo_shadow_2.get_width() // 2 + 4, 150 + 4))
 
-        # Banner do Título Principal Neon
-        pygame.draw.rect(tela, (22, 14, 38), (60, 48, 680, 68), border_radius=8)
-        pygame.draw.rect(tela, COR_NEON_AZUL, (60, 48, 680, 68), width=2, border_radius=8)
+        txt_mid = fonte_titulo_lg.render("MID", True, COR_BRANCO)
+        txt_collection = fonte_titulo_lg.render("COLLECTION", True, COR_BRANCO)
+        tela.blit(txt_mid, (LARGURA // 2 - txt_mid.get_width() // 2, 80))
+        tela.blit(txt_collection, (LARGURA // 2 - txt_collection.get_width() // 2, 150))
 
-        pulso_titulo = math.sin(agora * 3) * 20
-        cor_tit_glow = (min(255, max(0, int(0 + pulso_titulo))), 240, 255)
-        txt_titulo = fonte_titulo_lg.render("★ RETRO ARCADE CLASSICS ★", True, cor_tit_glow)
-        tela.blit(txt_titulo, (LARGURA // 2 - txt_titulo.get_width() // 2, 54))
+        pygame.draw.line(tela, (235, 235, 235), (220, 245), (580, 245), 2)
 
-        txt_sub = fonte_arcade_sm.render("ROBOCORE BLACKBOARD - LAUNCHER EDITIONS", True, COR_NEON_ROSA)
-        tela.blit(txt_sub, (LARGURA // 2 - txt_sub.get_width() // 2, 92))
+        # Opções do menu em estilo pixel, em destaque vertical
+        base_y = 270
+        lista_rects_menu = []
+        for idx, item in enumerate(opcoes_menu):
+            y = base_y + idx * 72
+            selecionado = (opcao_menu == idx)
+            fator_hover = 1.014 if selecionado else 1.0
 
-        # Status de Hardware
-        if arduino:
-            status_txt = f"● ARDUINO ONLINE ({arduino.port})"
-            cor_st = COR_NEON_VERDE
-        else:
-            status_txt = "● MODO TECLADO (WASD / TECLAS DIRECIONAIS)"
-            cor_st = COR_NEON_AMARELO
+            if item["sub"]:
+                txt1_base = fonte_titulo_md.render(item["titulo"], True, COR_BRANCO if selecionado else (220, 220, 220))
+                txt2_base = fonte_card_sub.render(item["sub"], True, COR_NEON_AMARELO if selecionado else (200, 200, 200))
 
-        txt_st = fonte_arcade_sm.render(status_txt, True, cor_st)
-        tela.blit(txt_st, (LARGURA // 2 - txt_st.get_width() // 2, 126))
+                if selecionado:
+                    txt1 = pygame.transform.smoothscale(txt1_base, (max(1, int(txt1_base.get_width() * fator_hover)), max(1, int(txt1_base.get_height() * fator_hover))))
+                    txt2 = pygame.transform.smoothscale(txt2_base, (max(1, int(txt2_base.get_width() * fator_hover)), max(1, int(txt2_base.get_height() * fator_hover))))
+                else:
+                    txt1 = txt1_base
+                    txt2 = txt2_base
 
-        # --- CARDS DO MENU ---
-        y_base = 154
-        card_w, card_h = 520, 56
-        espacamento = 64
-
-        for i, item in enumerate(opcoes):
-            y_pos = y_base + i * espacamento
-            selecionado = (i == opcao_menu)
-
-            card_x = LARGURA // 2 - card_w // 2
-            card_rect = pygame.Rect(card_x, y_pos, card_w, card_h)
+                x1 = LARGURA // 2 - txt1.get_width() // 2
+                x2 = LARGURA // 2 - txt2.get_width() // 2
+                rect_item = pygame.Rect(x1 - 40, y - 8, txt1.get_width() + 80, txt1.get_height() + txt2.get_height() + 32)
+                lista_rects_menu.append(rect_item)
+                tela.blit(txt1, (x1, y))
+                tela.blit(txt2, (x2, y + 36))
+            else:
+                txt_base = fonte_titulo_md.render(item["titulo"], True, COR_BRANCO if selecionado else (220, 220, 220))
+                txt = pygame.transform.smoothscale(txt_base, (max(1, int(txt_base.get_width() * fator_hover)), max(1, int(txt_base.get_height() * fator_hover)))) if selecionado else txt_base
+                x = LARGURA // 2 - txt.get_width() // 2
+                rect_item = pygame.Rect(x - 18, y + 5, txt.get_width() + 36, txt.get_height() + 20)
+                lista_rects_menu.append(rect_item)
+                tela.blit(txt, (x, y + 10))
 
             if selecionado:
-                cor_bg = COR_CARD_SEL
-                cor_borda = COR_NEON_VERDE
-                cor_tit = COR_NEON_VERDE
-                cor_sub = (200, 240, 210)
+                pygame.draw.polygon(tela, COR_NEON_AMARELO, [(170, y + 18), (195, y + 28), (170, y + 38)])
+                pygame.draw.polygon(tela, COR_NEON_AMARELO, [(630, y + 18), (605, y + 28), (630, y + 38)])
 
-                pygame.draw.polygon(tela, COR_NEON_VERDE, [(card_x - 30, y_pos + 18), (card_x - 30, y_pos + 38), (card_x - 12, y_pos + 28)])
-                pygame.draw.polygon(tela, COR_NEON_VERDE, [(card_x + card_w + 30, y_pos + 18), (card_x + card_w + 30, y_pos + 38), (card_x + card_w + 12, y_pos + 28)])
-            else:
-                cor_bg = COR_CARD_BG
-                cor_borda = (50, 45, 75)
-                cor_tit = (220, 225, 240)
-                cor_sub = COR_TEXTO_MUTED
+        # Ícones do espaço na tela inicial
+        nave_img = pygame.transform.scale(nave_tela_inicial, (90, 70))
+        alien_img = pygame.transform.scale(alien_tela_inicial, (64, 64))
 
-            pygame.draw.rect(tela, cor_bg, card_rect, border_radius=8)
-            pygame.draw.rect(tela, cor_borda, card_rect, width=2 if selecionado else 1, border_radius=8)
+        tela.blit(nave_img, (75, 430))
+        tela.blit(alien_img, (660, 350))
 
-            txt_ic = fonte_card_tit.render(item['icon'], True, (255, 255, 255))
-            txt_t = fonte_card_tit.render(item['titulo'], True, cor_tit)
-            txt_s = fonte_card_sub.render(item['sub'], True, cor_sub)
-
-            tela.blit(txt_ic, (card_x + 18, y_pos + 16))
-            tela.blit(txt_t, (card_x + 55, y_pos + 11))
-            tela.blit(txt_s, (card_x + 55, y_pos + 32))
-
+        # Texto de ação inferior
         if (frame_count // 25) % 2 == 0:
-            txt_start = fonte_card_tit.render("► PRESSIONE BOTÃO DE TIRO / ENTER PARA SELECIONAR ◄", True, COR_NEON_AMARELO)
-            tela.blit(txt_start, (LARGURA // 2 - txt_start.get_width() // 2, 492))
-
-        txt_dica = fonte_arcade_sm.render("JOYSTICK Y / W-S: NAVEGAR  |  BOTÃO DE TIRO / ESPAÇO: CONFIRMAR", True, COR_TEXTO_MUTED)
-        tela.blit(txt_dica, (LARGURA // 2 - txt_dica.get_width() // 2, 545))
+            txt_start = fonte_acao.render("> PRESSIONE ACTION PARA INICIAR <", True, COR_NEON_AMARELO)
+            tela.blit(txt_start, (LARGURA // 2 - txt_start.get_width() // 2, ALTURA - 42))
 
         pygame.display.flip()
         relogio.tick(60)
 
     if arduino:
-        arduino.close()
+        try:
+            arduino.close()
+        except Exception:
+            pass
     pygame.quit()
-    sys.exit()
+    return
 
 if __name__ == '__main__':
     main()

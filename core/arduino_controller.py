@@ -81,8 +81,8 @@ def ler_hardware(arduino=None):
 
         if keys[pygame.K_SPACE] or keys[pygame.K_RETURN] or keys[pygame.K_z]:
             btn_tiro = 0
-            
-        if keys[pygame.K_ESCAPE] or keys[pygame.K_BACKSPACE]:
+
+        if keys[pygame.K_ESCAPE]:
             btn_menu = 0
 
     return joy_x, joy_y, btn_menu, btn_tiro
