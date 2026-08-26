@@ -37,6 +37,12 @@ def init_db():
         )
     ''')
 
+    # Garante a existência da coluna nivel em tabelas pré-existentes
+    cursor.execute("PRAGMA table_info(partidas)")
+    colunas = [col[1] for col in cursor.fetchall()]
+    if 'nivel' not in colunas:
+        cursor.execute("ALTER TABLE partidas ADD COLUMN nivel INTEGER DEFAULT 1")
+
     conn.commit()
     conn.close()
 
@@ -75,7 +81,7 @@ def obter_ou_criar_jogador(nome):
     conn.close()
     return jogador_id
 
-def salvar_partida_space_invaders(jogador_id, pontuacao, tempo_segundos=0.0):
+def salvar_partida_space_invaders(jogador_id, pontuacao, tempo_segundos=0.0, nivel=1):
     """
     Salva a pontuação do Space Invaders.
     - Se o jogador já possuir registro, atualiza se a nova pontuação for maior.
@@ -96,14 +102,14 @@ def salvar_partida_space_invaders(jogador_id, pontuacao, tempo_segundos=0.0):
         if pontuacao > pontuacao_antiga or (pontuacao == pontuacao_antiga and tempo_segundos > (tempo_antigo or 0.0)):
             cursor.execute('''
                 UPDATE partidas
-                SET pontuacao = ?, tempo_segundos = ?, data_hora = ?
+                SET pontuacao = ?, tempo_segundos = ?, nivel = ?, data_hora = ?
                 WHERE id = ?
-            ''', (pontuacao, tempo_segundos, agora_str, partida_id))
+            ''', (pontuacao, tempo_segundos, nivel, agora_str, partida_id))
     else:
         cursor.execute('''
-            INSERT INTO partidas (jogador_id, jogo, pontuacao, tempo_segundos, data_hora)
-            VALUES (?, 'space_invaders', ?, ?, ?)
-        ''', (jogador_id, pontuacao, tempo_segundos, agora_str))
+            INSERT INTO partidas (jogador_id, jogo, pontuacao, tempo_segundos, nivel, data_hora)
+            VALUES (?, 'space_invaders', ?, ?, ?, ?)
+        ''', (jogador_id, pontuacao, tempo_segundos, nivel, agora_str))
 
     conn.commit()
 

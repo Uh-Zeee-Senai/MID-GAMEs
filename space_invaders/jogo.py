@@ -143,8 +143,8 @@ def carregar_sprites():
         else:
             SPRITES[key] = None
 
-def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0, inimigos_existentes=None, creeper_reduzido=False):
-    """Cria um inimigo respeitando a raridade, tamanho e HP de Subchefe (Creeper Verde = 5 HP)."""
+def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0, inimigos_existentes=None, creeper_reduzido=False, nivel=1):
+    """Cria um inimigo respeitando a raridade, tamanho e HP escalável por Nível (Creeper Verde = 5 + nivel - 1 HP)."""
     if tipo_forçado:
         tipo = tipo_forçado
     else:
@@ -168,7 +168,7 @@ def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0, inimigos_existentes
     is_subchefe = (tipo == 'verde')
     w = 72 if is_subchefe else 48
     h = 72 if is_subchefe else 48
-    hp = 5 if is_subchefe else 1
+    hp = (5 + (nivel - 1)) if is_subchefe else 1
 
     return {
         "tipo": tipo,
@@ -181,14 +181,15 @@ def novo_inimigo(colunas_x, tipo_forçado=None, pontuacao=0, inimigos_existentes
         "altura": h,
         "hp": hp,
         "hp_max": hp,
-        "dash_timer": random.uniform(2.0, 4.0),
+        "dash_timer": random.uniform(max(1.0, 2.0 - (nivel * 0.1)), max(1.8, 3.5 - (nivel * 0.15))),
         "em_dash": False,
         "congelado_ate": 0.0
     }
 
-def novo_boss_malware(colunas_x):
-    """Cria o Boss Malware: Reúne TODAS as habilidades (dash, zig-zag, teleporte) e possui 20 HP."""
+def novo_boss_malware(colunas_x, nivel=1):
+    """Cria o Boss Malware: Reúne TODAS as habilidades e possui HP escalável com o Nível (20 + (nivel - 1)*3 HP)."""
     col_idx = random.randint(0, len(colunas_x) - 1)
+    hp_boss = BOSS_HITS_REQUIRED + (nivel - 1) * 3
     return {
         "tipo": "boss_malware",
         "coluna": col_idx,
@@ -198,9 +199,9 @@ def novo_boss_malware(colunas_x):
         "dx": 0.0,
         "largura": 96,
         "altura": 96,
-        "hp": BOSS_HITS_REQUIRED,
-        "hp_max": BOSS_HITS_REQUIRED,
-        "dash_timer": random.uniform(2.0, 3.5),
+        "hp": hp_boss,
+        "hp_max": hp_boss,
+        "dash_timer": random.uniform(max(1.0, 2.0 - (nivel * 0.1)), max(1.8, 3.5 - (nivel * 0.12))),
         "em_dash": False,
         "congelado_ate": 0.0
     }
@@ -292,6 +293,9 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
     total_inimigos_derrotados = 0
     tempo_restante = 60.0
     TEMPO_MAXIMO_REF = 60.0
+
+    nivel_atual = 1
+    nivel_notificado = 1
 
     velocidade_base_inimigo = 0.50
 
@@ -415,6 +419,22 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             relogio.tick(60)
             continue
 
+        # --- SISTEMA DE 10 NÍVEIS PROGRESSIVOS (0-10k: Nível 1, 10k+: Nível 2, 20k+: Nível 3, ..., 100k+: Nível 10) ---
+        nivel_atual = min(10, max(1, (pontuacao // 10000) + 1))
+
+        if nivel_atual > nivel_notificado:
+            nivel_notificado = nivel_atual
+            enviar_comando(arduino, 'E')
+            cor_lvl = (255, 215, 0) if nivel_atual < 10 else (255, 0, 128)
+            txt_lvl = "★ NÍVEL MÁXIMO HARDCORE ALCANÇADO! ★" if nivel_atual == 10 else f"★ LEVEL UP! NÍVEL {nivel_atual} ALCANÇADO! ★"
+            popups.append({
+                "texto": txt_lvl,
+                "cor": cor_lvl,
+                "x": LARGURA // 2,
+                "y": 180,
+                "criado": agora
+            })
+
         # TEMPO CONTANDO CONTINUAMENTE
         tempo_restante -= dt
         if tempo_restante <= 0:
@@ -425,11 +445,11 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                 tempo_game_over = agora  # Registra o momento exato do game over
                 enviar_comando(arduino, 'M')
 
-                # Salva a pontuação no banco de dados SQLite
+                # Salva a pontuação no banco de dados SQLite com o nível alcançado
                 if nome_jogador:
                     jogador_id = obter_ou_criar_jogador(nome_jogador)
                     if jogador_id:
-                        salvar_partida_space_invaders(jogador_id, pontuacao, tempo_final_jogo)
+                        salvar_partida_space_invaders(jogador_id, pontuacao, tempo_final_jogo, nivel=nivel_atual)
 
         # --- TRANSIÇÃO E SPAWN DO JOGO NORMAL ---
         if fase_jogo == "ONDA_INICIAL":
@@ -443,12 +463,13 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     "criado": agora
                 })
         else:
-            # HORDA MAIS RÁPIDA NO COMEÇO E PROGRESSÃO MAIS GRADUAL
-            limite_horda = MAX_INIMIGOS_POS_BOSS if dificuldade_pos_boss else MAX_INIMIGOS_TELA
+            # HORDA ESCALADA CONFORME O NÍVEL ALCANÇADO (MÁX 25 NA TELA)
+            limite_horda_base = MAX_INIMIGOS_POS_BOSS if dificuldade_pos_boss else MAX_INIMIGOS_TELA
+            limite_horda = min(25, limite_horda_base + (nivel_atual - 1) * 2)
             bonus_progressao = 2 if dificuldade_pos_boss else 0
-            num_inimigos_desejado = min(limite_horda, 9 + bonus_progressao + (pontuacao // 160))
+            num_inimigos_desejado = min(limite_horda, 9 + bonus_progressao + (pontuacao // 160) + (nivel_atual - 1))
 
-            # O boss dispara uma horda maior ao entrar, depois o jogo volta ao ritmo normal.
+            # O boss dispara uma horda maior ao entrar
             mult_horda = 1.9 if boss_horda_ativo else 1.0
             bonus_horda_boss = 6 if boss_horda_ativo else 0
             num_horda_com_aura = min(limite_horda, max(num_inimigos_desejado + bonus_horda_boss, int(num_inimigos_desejado * mult_horda)))
@@ -462,10 +483,10 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     boss_ataque_proximo = agora + 1.2
                     boss_sequencia_ataque = 0
                     boss_aparicoes += 1
-                    boss = novo_boss_malware(COLUNAS_X)
+                    boss = novo_boss_malware(COLUNAS_X, nivel=nivel_atual)
                     if boss_aparicoes >= 2:
-                        boss['hp'] = BOSS_HITS_REQUIRED_SECOND
-                        boss['hp_max'] = BOSS_HITS_REQUIRED_SECOND
+                        boss['hp'] = BOSS_HITS_REQUIRED_SECOND + (nivel_atual - 1) * 3
+                        boss['hp_max'] = boss['hp']
                     aliens.append(boss)
                     popups.append({
                         "texto": "☠ BOSS MALWARE DETECTADO! HORDA INVOCADA! ☠",
@@ -482,10 +503,10 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     boss_ataque_proximo = agora + 1.2
                     boss_sequencia_ataque = 0
                     boss_aparicoes += 1
-                    boss = novo_boss_malware(COLUNAS_X)
+                    boss = novo_boss_malware(COLUNAS_X, nivel=nivel_atual)
                     if boss_aparicoes >= 2:
-                        boss['hp'] = BOSS_HITS_REQUIRED_SECOND
-                        boss['hp_max'] = BOSS_HITS_REQUIRED_SECOND
+                        boss['hp'] = BOSS_HITS_REQUIRED_SECOND + (nivel_atual - 1) * 3
+                        boss['hp_max'] = boss['hp']
                     aliens.append(boss)
                     popups.append({
                         "texto": "☠ BOSS MALWARE SURGIU! ☠",
@@ -495,7 +516,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                         "criado": agora
                     })
                 else:
-                    aliens.append(novo_inimigo(COLUNAS_X, pontuacao=pontuacao, inimigos_existentes=aliens, creeper_reduzido=boss_primeiro_spawnou))
+                    aliens.append(novo_inimigo(COLUNAS_X, pontuacao=pontuacao, inimigos_existentes=aliens, creeper_reduzido=boss_primeiro_spawnou, nivel=nivel_atual))
 
         # MOVIMENTAÇÃO DO JOGADOR
         MIN_X = 45
@@ -640,7 +661,8 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                 continue
 
             mult_buff = 1.35 if buff_velocidade_ativo else 1.0
-            vel_atual = min(velocidade_base_inimigo * mult_buff, VELOCIDADE_INIMIGO_MAX)
+            vel_base_nivel = 0.50 + (nivel_atual - 1) * 0.15
+            vel_atual = min(vel_base_nivel * mult_buff, VELOCIDADE_INIMIGO_MAX)
 
             if a['tipo'] == 'verde': # Subchefe Creeper Verde (Movimentação Zig-Zag)
                 a['y'] += vel_atual * 0.8
@@ -948,7 +970,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
 
         tempo_sobrevivido = tempo_final_jogo if game_over else max(0.0, agora - tempo_inicio_partida)
         tempo_fmt = f"{int(tempo_sobrevivido // 60):02d}:{int(tempo_sobrevivido % 60):02d}"
-        txt_score = fonte_hud.render(f"PTS: {pontuacao:04d}  |  TEMPO: {tempo_fmt}", True, (255, 255, 255))
+        txt_score = fonte_hud.render(f"PTS: {pontuacao:04d}  |  NÍVEL: {nivel_atual}  |  TEMPO: {tempo_fmt}", True, (255, 255, 255))
         tela.blit(txt_score, (20, 15))
 
         # BARRA DE TEMPO DE VIDA
