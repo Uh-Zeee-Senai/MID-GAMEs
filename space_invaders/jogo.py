@@ -19,7 +19,7 @@ FREEZE_CHANCE = 0.40
 
 BOSS_FIRST_SPAWN_SCORE = 500
 BOSS_SPAWN_CHANCE = 0.012
-BOSS_HITS_REQUIRED = 28
+BOSS_HITS_REQUIRED = 16
 BOSS_TIME_MULTIPLIER_ON_DEFEAT = 1.1
 BOSS_TIME_DIVISOR_ON_ESCAPE = 1.6
 
@@ -442,8 +442,8 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             # A aura do boss agora aumenta a horda de forma moderada, sem virar um enjoo de inimigos.
             num_inimigos_desejado = min(MAX_INIMIGOS_TELA, 9 + (pontuacao // 160))
 
-            mult_horda = 1.5 if boss_horda_ativo else 1.0
-            horda_extra = 2 if boss_horda_ativo else 0
+            mult_horda = 3.0 if boss_horda_ativo else 1.0
+            horda_extra = 4 if boss_horda_ativo else 0
             num_horda_com_aura = min(MAX_INIMIGOS_TELA, max(num_inimigos_desejado + horda_extra, int(num_inimigos_desejado * mult_horda)))
 
             while len(aliens) < num_horda_com_aura:
@@ -452,7 +452,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     boss_ativo = True
                     boss_aura_ativo = True
                     boss_horda_ativo = True
-                    boss_ataque_proximo = agora + 1.2
+                    boss_ataque_proximo = agora + 1.0
                     aliens.append(novo_boss_malware(COLUNAS_X))
                     popups.append({
                         "texto": "☠ BOSS MALWARE DETECTADO! HORDA INVOCADA! ☠",
@@ -466,7 +466,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     boss_ativo = True
                     boss_aura_ativo = True
                     boss_horda_ativo = True
-                    boss_ataque_proximo = agora + 1.2
+                    boss_ataque_proximo = agora + 1.0
                     aliens.append(novo_boss_malware(COLUNAS_X))
                     popups.append({
                         "texto": "☠ BOSS MALWARE SURGIU! ☠",
@@ -494,9 +494,9 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
         # DISPAROS DO JOGADOR
         tiro_duplo_ativo = (agora < bonus_tiro_duplo_ate)
         ataque_area_ativo = (agora < bonus_ataque_area_ate)
-        tiro_rapido_ativo = (agora < bonus_tiro_rapido_ate)
-        escudo_ativo = (agora < bonus_escudo_ate)
         duplicacao_ativa = (agora < bonus_duplicacao_ate)
+        tiro_rapido_ativo = (agora < bonus_tiro_rapido_ate) and not (tiro_duplo_ativo or duplicacao_ativa)
+        escudo_ativo = (agora < bonus_escudo_ate)
         INTERVALO_TIRO_ATUAL = 0.08 if tiro_rapido_ativo else INTERVALO_TIRO
 
         if btn_tiro == 0 and (agora - tempo_ultimo_tiro >= INTERVALO_TIRO_ATUAL):
@@ -545,7 +545,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     for proj_idx in range(3):
                         spread = (proj_idx - 1) * 0.22
                         angulo = angulo_base + inclinacao + spread * lado
-                        velocidade = 5.1
+                        velocidade = 6
                         ataques_boss.append({
                             'x': boss['x'] + (lado * 18),
                             'y': boss['y'] + 35,
@@ -555,7 +555,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                             'criado': agora,
                         })
 
-                boss_ataque_proximo = agora + 1.7
+                boss_ataque_proximo = agora + 1.2
 
         for atk in ataques_boss[:]:
             atk['x'] += atk['vx'] * 60 * dt
@@ -802,7 +802,7 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                 clone_img = SPRITES.get('nave')
                 if clone_img:
                     clone_surface = clone_img.copy()
-                    clone_surface.set_alpha(140)
+                    clone_surface.set_alpha(85)
                     tela.blit(clone_surface, (clone_x - 24, py - 24))
                 else:
                     pygame.draw.polygon(tela, (46, 204, 113), [(clone_x, py - 22), (clone_x - 24, py + 10), (clone_x + 24, py + 10)], 2)
