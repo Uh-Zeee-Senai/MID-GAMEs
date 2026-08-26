@@ -592,6 +592,13 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             atk['y'] += atk['vy'] * 60 * dt
 
             if (abs(atk['x'] - jogador_x) < 26) and (abs(atk['y'] - (ALTURA - 45)) < 24):
+                if escudo_ativo:
+                    popups.append({
+                        "texto": "🛡 ABSORVIDO", "cor": (79, 195, 255), "x": jogador_x, "y": ALTURA - 80, "criado": agora
+                    })
+                    ataques_boss.remove(atk)
+                    continue
+
                 tempo_restante -= 45.0
                 popups.append({
                     "texto": "-45s", "cor": (231, 76, 60), "x": jogador_x, "y": ALTURA - 80, "criado": agora
@@ -684,7 +691,11 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
                     popups.append({"texto": f"☠ AURA!", "cor": (231, 76, 60), "x": a['x'], "y": ALTURA - 90, "criado": agora})
                 elif a['tipo'] == 'verde':
                     popups.append({"texto": "!", "cor": (231, 76, 60), "x": a['x'], "y": ALTURA - 90, "criado": agora})
-                tempo_restante -= dano
+
+                if escudo_ativo:
+                    popups.append({"texto": "🛡 ESCUDO", "cor": (79, 195, 255), "x": jogador_x, "y": ALTURA - 90, "criado": agora})
+                else:
+                    tempo_restante -= dano
 
                 if a in aliens:
                     aliens.remove(a)
@@ -813,6 +824,11 @@ def rodar_jogo(tela, relogio, arduino, ler_hardware, nome_jogador="Anônimo"):
             tela.blit(SPRITES['nave'], (px - 24, py - 24))
         else:
             pygame.draw.polygon(tela, (46, 204, 113), [(px, py - 22), (px - 24, py + 10), (px + 24, py + 10)])
+
+        if escudo_ativo:
+            raio = 42 + int(8 * math.sin(agora * 12.0))
+            pygame.draw.circle(tela, (79, 195, 255), (int(px), int(py - 10)), raio, width=3)
+            pygame.draw.circle(tela, (150, 220, 255), (int(px), int(py - 10)), max(10, raio - 12), width=2)
 
         if agora < bonus_duplicacao_ate:
             for offset in (-60, 60):

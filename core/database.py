@@ -40,6 +40,19 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+def resetar_placar_space_invaders():
+    """Zera o ranking persistido do Space Invaders."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM partidas WHERE jogo = 'space_invaders'")
+    cursor.execute("DELETE FROM jogadores WHERE id NOT IN (SELECT DISTINCT jogador_id FROM partidas)")
+
+    conn.commit()
+    conn.close()
+
+
 def obter_ou_criar_jogador(nome):
     """Busca um jogador pelo nome ou o cadastra se for novo. Retorna o ID."""
     nome = nome.strip()[:10]  # Limite máximo de 10 caracteres
